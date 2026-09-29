@@ -11,6 +11,10 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Fixed
 
+- **net48: a background-thread exception from design-time user code no longer kills the engine.** A `Thread`,
+  `ThreadPool` or `System.Threading.Timer` callback started by user code during a render (a base form's constructor, a
+  control's `Load`) that later threw terminated the engine process under the default unhandled-exception policy. The
+  engine now opts into `legacyUnhandledExceptionPolicy` and logs such exceptions to the output channel.
 - **net48: a control in front of an overlapping sibling is no longer painted behind it.** `Control.DrawToBitmap` on
   .NET Framework paints overlapping children in reverse z-order, so a freshly dropped control (added at the front)
   disappeared under a large sibling such as a `Chart` or a docked panel. The preview is now captured window by window

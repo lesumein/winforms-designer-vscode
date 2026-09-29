@@ -4733,6 +4733,13 @@ namespace WinFormsDesigner.Engine.Net48
 
         public StaDispatcher()
         {
+            // With legacyUnhandledExceptionPolicy (App.config) a background-thread exception from design-time user code
+            // no longer kills the engine; surface it instead of losing it silently.
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            {
+                try { Console.Error.WriteLine("[engine:net48] design-time background code threw (engine continues): " + e.ExceptionObject); }
+                catch { /* logging must never throw */ }
+            };
             var t = new Thread(Loop) { IsBackground = true, Name = "winforms-net48-sta" };
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
