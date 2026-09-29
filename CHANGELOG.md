@@ -11,6 +11,11 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Fixed
 
+- **Localized forms with framework enum resources render.** A localized form stores every enum-valued property as
+  a typed `.resx` node; only a handful of enums (`AnchorStyles`, `DockStyle`, …) were accepted, so e.g. a `TextBox`'s
+  `ScrollBars`, `ImeMode` or a `CheckBox`'s `Appearance` was refused as unsafe and forced the compiled fallback. Any
+  public enum of the WinForms / System.Drawing framework assemblies is now accepted (converted by name, no
+  deserialization).
 - **Enums nested in a class resolve.** An enum declared inside a control class (`Vendor.TrackBar.ScaleType`) is
   written with dots in C# but named `Vendor.TrackBar+ScaleType` by the CLR, so `unresolved enum type` forced the
   compiled fallback. The executor now retries the trailing segments as nested type names.

@@ -273,7 +273,25 @@ namespace WinFormsDesigner.Engine
         {
             if (IsPlainStringType(typeAttr)) return true;
             var name = TypeNameOnly(typeAttr);
-            return SafeValueTypeNames.Contains(name);
+            return SafeValueTypeNames.Contains(name) || FrameworkEnumByName(name) != null;
+        }
+
+        /// <summary>A localized form stores every enum-valued property as a typed node
+        /// (`type="System.Windows.Forms.ScrollBars, System.Windows.Forms"`). Any PUBLIC ENUM declared by the WinForms or
+        /// System.Drawing framework assemblies is converted by EnumConverter from its invariant name — no user code, no
+        /// deserialization — so the whole family is safe, not only the few listed above. Looked up by name in those
+        /// assemblies only, so a project type cannot impersonate one.</summary>
+        private static Type? FrameworkEnumByName(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName)) return null;
+            foreach (var asm in new[] { typeof(System.Windows.Forms.Control).Assembly, typeof(Point).Assembly,
+                                        typeof(Color).Assembly, typeof(Font).Assembly, typeof(ContentAlignment).Assembly })
+            {
+                Type? t;
+                try { t = asm.GetType(typeName, throwOnError: false); } catch { t = null; }
+                if (t != null && t.IsEnum && t.IsPublic) return t;
+            }
+            return null;
         }
 
         private static bool IsSafeByteArrayImage(string? mimetype, string? typeAttr)
@@ -317,7 +335,7 @@ namespace WinFormsDesigner.Engine
         private static bool IsApplyResourcesPropertyType(Type type)
         {
             var name = type.FullName;
-            return name != null && SafeValueTypeNames.Contains(name);
+            return name != null && (SafeValueTypeNames.Contains(name) || FrameworkEnumByName(name) == type);
         }
 
         private static Type? SafeTypeByName(string typeName)
@@ -352,7 +370,7 @@ namespace WinFormsDesigner.Engine
                 case "System.Windows.Forms.DockStyle": return typeof(System.Windows.Forms.DockStyle);
                 case "System.Windows.Forms.FlatStyle": return typeof(System.Windows.Forms.FlatStyle);
                 case "System.Drawing.ContentAlignment": return typeof(ContentAlignment);
-                default: return null;
+                default: return FrameworkEnumByName(typeName);
             }
         }
 
