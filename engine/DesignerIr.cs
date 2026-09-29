@@ -46,7 +46,9 @@ namespace WinFormsDesigner.Engine
         //    fallback. Same rule: a mismatched producer/executor pair must refuse each other, not half-read a document.
         // 5: designer data-object LOCALS — IrConstructLocalObject / IrSetLocalObjectProp / IrAddLocalObject statements and
         //    the IrLocalObjectRef value (MSChart ChartArea/Series/Legend/Title, DataGridViewCellStyle). Same rule.
-        public const int SchemaVersion = 5;
+        // 6: IrSetChildIndex, and layout / ISupportInitialize / Controls.Add / property statements that target an
+        //    INHERITED control of a derived designer. Same rule.
+        public const int SchemaVersion = 6;
         /// <summary>Max namespace candidates carried for unqualified type names (usings + enclosing namespace chain).
         /// Generous for real files, bounded so a forged document cannot make resolution quadratic.</summary>
         public const int MaxNamespaceContext = 128;
@@ -351,6 +353,19 @@ namespace WinFormsDesigner.Engine
         public List<string> NodeLocalNames { get; set; } = new List<string>();
     }
 
+    /// <summary>`parent.Controls.SetChildIndex(this.child, n);` — VS emits it in a DERIVED designer to restore the z-order
+    /// of inherited controls around the ones the derived form adds. Parent is the root (`this.Controls`) or a named
+    /// control (current-source or inherited) plus optional read-only hops; the child must be a known control.</summary>
+    [Serializable]
+    public sealed class IrSetChildIndex : IrStatement
+    {
+        public bool ParentIsRoot { get; set; }
+        public string ParentName { get; set; } = "";
+        public List<string> ParentPath { get; set; } = new List<string>();
+        public string ChildName { get; set; } = "";
+        public int Index { get; set; }
+    }
+
     // ---- Designer data-object LOCALS: VS serializes some non-component objects as InitializeComponent locals —
     // MSChart's ChartArea/Series/Legend/Title (`this.chart1.ChartAreas.Add(chartArea1)`) and DataGridViewCellStyle
     // (`this.grid.ColumnHeadersDefaultCellStyle = dataGridViewCellStyle1`). Like tree nodes they are plain data
@@ -464,7 +479,7 @@ namespace WinFormsDesigner.Engine
             typeof(IrConstructComponent), typeof(IrSetProperty), typeof(IrAddControl), typeof(IrAddCollectionItem),
             typeof(IrSetExtender), typeof(IrApplyResources), typeof(IrBeginInit), typeof(IrEndInit), typeof(IrWireEvent), typeof(IrLayoutCall),
             typeof(IrConstructTreeNode), typeof(IrSetTreeNodeProp), typeof(IrAddTreeNodes),
-            typeof(IrConstructLocalObject), typeof(IrSetLocalObjectProp), typeof(IrAddLocalObject),
+            typeof(IrConstructLocalObject), typeof(IrSetLocalObjectProp), typeof(IrAddLocalObject), typeof(IrSetChildIndex),
         };
 
         /// <summary>Validate structure; returns null when valid, else a diagnostic reason (the caller refuses the
@@ -578,6 +593,12 @@ namespace WinFormsDesigner.Engine
                     if (ta.NodeLocalNames == null || ta.NodeLocalNames.Count == 0 || ta.NodeLocalNames.Count > IrLimits.MaxArrayItems) return "invalid tree-node add list";
                     foreach (var n in ta.NodeLocalNames) { if (!ValidIdent(n)) return "invalid tree-node ref"; if (OverBudget(ref chars, n)) return "string budget exceeded"; }
                     return null;
+                case IrSetChildIndex ci:
+                    if (!ValidTarget(ci.ParentIsRoot, ci.ParentName)) return "invalid SetChildIndex parent";
+                    var cie = CheckPath(ci.ParentPath, min: 0); if (cie != null) return cie;
+                    if (!ValidIdent(ci.ChildName)) return "invalid SetChildIndex child";
+                    if (ci.Index < 0 || ci.Index > 10000) return "invalid SetChildIndex index";
+                    return OverBudget(ref chars, ci.ChildName) ? "string budget exceeded" : null;
                 case IrConstructLocalObject lo:
                     if (!ValidIdent(lo.LocalName)) return "invalid local name";
                     if (!IrLocalObjects.AllowedTypes.Contains(lo.TypeName ?? "")) return "local object type not allowed";

@@ -442,7 +442,12 @@ namespace WinFormsDesigner.Engine
             {
                 var lrecv = Flatten(ma.Expression);
                 bool lrecvIsRoot = lrecv.Count == 0;
-                bool okRecv = lrecvIsRoot || ctx.Fields.Contains(lrecv[0]);
+                // `this.panel1.SuspendLayout()` on a control this document does not declare: an INHERITED control of a
+                // derived designer. Only the direct one-hop `this.<name>` receiver; the executor accepts it only for a
+                // seeded inherited control and only through Control's own layout member.
+                bool lrecvInherited = lrecv.Count == 1 && !ctx.Fields.Contains(lrecv[0]) && !ctx.ObjectLocals.Contains(lrecv[0])
+                    && ChainRoot(ma.Expression) is ThisExpressionSyntax;
+                bool okRecv = lrecvIsRoot || ctx.Fields.Contains(lrecv[0]) || lrecvInherited;
                 var largs = inv.ArgumentList.Arguments;
                 // Per-method arg rules, because these are now EXECUTED. `Control` declares SuspendLayout() and
                 // PerformLayout() with no bool overload at all, so `panel1.SuspendLayout(true)` can only bind to a
@@ -475,7 +480,7 @@ namespace WinFormsDesigner.Engine
                 // A field receiver must be type-certain: the executor picks the layout member off the INSTANCE, and a
                 // vendor control that hides SuspendLayout (DevExpress's XtraForm does) makes that the same member C#
                 // bound only when the declared and constructed types agree.
-                if (!lrecvIsRoot && !ctx.TypeCertain.Contains(lrecv[0])) return Gap(Trim(inv));
+                if (!lrecvIsRoot && !lrecvInherited && !ctx.TypeCertain.Contains(lrecv[0])) return Gap(Trim(inv));
                 // `this` is NOT automatically safe: the interpreted root is an instance of the designed class's BASE,
                 // so a layout method the designed class itself declares (`private new void SuspendLayout()`) is not on
                 // the instance at all, and replaying the base's member would run something the build never ran.
@@ -512,14 +517,41 @@ namespace WinFormsDesigner.Engine
                 // The bracket itself is exact — the cast makes it an interface dispatch whatever the field's static
                 // type is. The HOPS are not: `this.edit1.Properties` binds through the field's declared type, so a
                 // chained bracket needs the same type-certainty a layout call does. A hop-free bracket does not.
-                if (initTarget.Count >= 1 && initTarget.Count <= IrLimits.MaxPathLength + 1 && ctx.Fields.Contains(initTarget[0])
-                    && (initTarget.Count == 1 || ctx.TypeCertain.Contains(initTarget[0])))
+                bool initInherited = initTarget.Count == 1 && !ctx.Fields.Contains(initTarget[0])
+                    && !ctx.ObjectLocals.Contains(initTarget[0]) && ChainRoot(ce.Expression is ParenthesizedExpressionSyntax initParen ? initParen.Expression : ce.Expression) is ThisExpressionSyntax;
+                if (initTarget.Count >= 1 && initTarget.Count <= IrLimits.MaxPathLength + 1
+                    && (initInherited || (ctx.Fields.Contains(initTarget[0])
+                        && (initTarget.Count == 1 || ctx.TypeCertain.Contains(initTarget[0])))))
                 {
                     var initPath = initTarget.Skip(1).ToList();
                     IrStatement n = method == "BeginInit"
                         ? new IrBeginInit { TargetName = initTarget[0], TargetPath = initPath }
                         : (IrStatement)new IrEndInit { TargetName = initTarget[0], TargetPath = initPath };
                     return One(n);
+                }
+                return Gap(Trim(inv));
+            }
+
+            // `this.Controls.SetChildIndex(this.button1, 0);` / `this.panel1.Controls.SetChildIndex(...)` — z-order restore VS
+            // writes in a derived designer. Receiver ends in `.Controls`, child is a `this.<name>`, index an int literal.
+            if (method == "SetChildIndex" && inv.ArgumentList.Arguments.Count == 2 && PlainArgs(inv))
+            {
+                var srecv = Flatten(ma.Expression);
+                var schild = Flatten(inv.ArgumentList.Arguments[0].Expression);
+                if (srecv.Count >= 1 && srecv[srecv.Count - 1] == "Controls" && srecv.Count - 1 <= IrLimits.MaxPathLength + 1
+                    && ChainRoot(ma.Expression) is ThisExpressionSyntax
+                    && schild.Count == 1 && ChainRoot(inv.ArgumentList.Arguments[0].Expression) is ThisExpressionSyntax
+                    && TryConstInt(inv.ArgumentList.Arguments[1].Expression, out int sidx) && sidx >= 0)
+                {
+                    bool sroot = srecv.Count == 1;
+                    return One(new IrSetChildIndex
+                    {
+                        ParentIsRoot = sroot,
+                        ParentName = sroot ? "" : srecv[0],
+                        ParentPath = sroot ? new List<string>() : srecv.Skip(1).Take(srecv.Count - 2).ToList(),
+                        ChildName = schild[0],
+                        Index = sidx,
+                    });
                 }
                 return Gap(Trim(inv));
             }

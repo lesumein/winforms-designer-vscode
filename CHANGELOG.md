@@ -25,6 +25,13 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Added
 
+- **Derived (inherited) designers interpret instead of falling back.** A derived form's `InitializeComponent` addresses
+  controls declared by its base — `this.panel1.SuspendLayout()`, `((ISupportInitialize)this.grid1).BeginInit()`,
+  `this.panel1.Controls.Add(this.newButton)`, `this.Controls.SetChildIndex(this.panel1, 0)`, and property writes beyond
+  the geometry/Text/Enabled/Visible/TabIndex allowlist. Each of these forced the compiled fallback. They now replay onto
+  the seeded inherited instance (any accessible field-backed `Control`, not only framework-typed ones); layout calls on
+  an inherited control accept only `Control`'s own member, and inherited geometry keeps the Dock/AutoSize/layout-panel
+  rule. New closed statement `IrSetChildIndex`. IR `SchemaVersion` 5 → 6.
 - **Designer data-object locals are interpreted.** VS serializes MSChart's `ChartArea`/`Series`/`Legend`/`Title`
   and `DataGridViewCellStyle` as `InitializeComponent` locals, which the IR builder reported as unrepresentable, so every
   form with a chart or a styled grid went to the compiled fallback (running the form's constructor/`Load`; charts could

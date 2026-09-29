@@ -228,11 +228,12 @@ namespace WinFormsDesigner.Engine
                 // remain eligible. Current-document members are identified by the IR construction set instead.
                 if (field.IsStatic || declared.Contains(field.Name)) continue;
                 bool accessible = field.IsPublic || field.IsFamily || field.IsFamilyOrAssembly;
+                // Any accessible field-backed Control qualifies — a project/vendor control too: it was already
+                // constructed (and its code run) by the compiled base, exactly as a current-source control is by the
+                // IR, so mutating it through the same statement vocabulary grants nothing new.
                 if (!accessible || !IsValidInheritedIdentifier(field.Name)
                     || !typeof(Control).IsAssignableFrom(field.FieldType)
-                    || !field.FieldType.IsInstanceOfType(control)
-                    || !DesignerAllowlists.IsTrustedFrameworkType(field.FieldType)
-                    || !DesignerAllowlists.IsTrustedFrameworkType(control.GetType())) continue;
+                    || !field.FieldType.IsInstanceOfType(control)) continue;
                 candidates.Add((field.Name, entry.Key));
             }
 
@@ -293,22 +294,13 @@ namespace WinFormsDesigner.Engine
                 case IrSetProperty p:
                     {
                         if (!TryTarget(p.TargetIsRoot, p.TargetName, inst, out var target, out var terr)) return terr;
-                        if (!p.TargetIsRoot && inheritedOverrideNames.Contains(p.TargetName))
-                        {
-                            if (p.PropertyPath.Count != 1)
-                                return "nested inherited override properties are not supported: " + p.TargetName;
-                            string inheritedProperty = p.PropertyPath[0];
-                            var inheritedDescriptor = TypeDescriptor.GetProperties(target)[inheritedProperty];
-                            string inheritedType = inheritedDescriptor?.PropertyType.FullName ?? "";
-                            if (inheritedDescriptor == null || inheritedDescriptor.IsReadOnly
-                                || !IsSupportedInheritedProperty(inheritedProperty, inheritedType))
-                                return "property is not eligible for an inherited override: " + p.TargetName + "." + inheritedProperty;
-                            if (IsInheritedGeometryProperty(inheritedProperty)
-                                && (target is not Control inheritedControl || !InheritedGeometryAllowed(inheritedControl)))
-                                return "inherited geometry is managed by Dock, AutoSize, or a layout-panel parent: " + p.TargetName;
-                        }
+                        // `this.panel1.Font = …` for an inherited panel1 arrives as a ROOT path [panel1, Font] (the
+                        // syntax-only front-end cannot tell an inherited control from a root property).
+                        int pstart = RedirectInheritedRootPath(ref target, p.TargetIsRoot, p.PropertyPath, 2, inst, inheritedOverrideNames, out _);
+                        // Geometry on an inherited Dock/AutoSize/layout-panel child is replayed as the compiled derived
+                        // InitializeComponent does it — WinForms' own layout then decides, exactly as at runtime.
                         // walk to the owner of the final property (all but the last hop must be readable properties)
-                        for (int i = 0; i < p.PropertyPath.Count - 1; i++)
+                        for (int i = pstart; i < p.PropertyPath.Count - 1; i++)
                         {
                             var mid = TypeDescriptor.GetProperties(target)[p.PropertyPath[i]];
                             if (mid == null) return "no property " + p.PropertyPath[i] + " on " + target.GetType().Name;
@@ -338,11 +330,11 @@ namespace WinFormsDesigner.Engine
 
                 case IrAddControl a:
                     {
-                        if ((!a.ParentIsRoot && inheritedOverrideNames.Contains(a.ParentName))
-                            || inheritedOverrideNames.Contains(a.ChildName))
+                        if (inheritedOverrideNames.Contains(a.ChildName))
                             return "structural mutation of an inherited control is not supported";
                         if (!TryTarget(a.ParentIsRoot, a.ParentName, inst, out var parentObj, out var perr)) return perr;
-                        foreach (var hop in a.ParentPath)
+                        int astart = RedirectInheritedRootPath(ref parentObj, a.ParentIsRoot, a.ParentPath, 1, inst, inheritedOverrideNames, out _);
+                        foreach (var hop in a.ParentPath.Skip(astart))
                         {
                             var mid = TypeDescriptor.GetProperties(parentObj)[hop];
                             if (mid == null) return "no property " + hop + " on " + parentObj.GetType().Name;
@@ -361,10 +353,9 @@ namespace WinFormsDesigner.Engine
 
                 case IrAddCollectionItem it:
                     {
-                        if (!it.TargetIsRoot && inheritedOverrideNames.Contains(it.TargetName))
-                            return "collection mutation of an inherited control is not supported";
                         if (!TryTarget(it.TargetIsRoot, it.TargetName, inst, out var owner, out var oerr)) return oerr;
-                        for (int i = 0; i < it.PropertyPath.Count; i++)
+                        int istart = RedirectInheritedRootPath(ref owner, it.TargetIsRoot, it.PropertyPath, 2, inst, inheritedOverrideNames, out _);
+                        for (int i = istart; i < it.PropertyPath.Count; i++)
                         {
                             var mid = TypeDescriptor.GetProperties(owner)[it.PropertyPath[i]];
                             if (mid == null) return "no property " + it.PropertyPath[i] + " on " + owner.GetType().Name;
@@ -388,8 +379,7 @@ namespace WinFormsDesigner.Engine
 
                 case IrLayoutCall l:
                     {
-                        if (!l.TargetIsRoot && inheritedOverrideNames.Contains(l.TargetName))
-                            return "layout call on an inherited control is not supported";
+                        bool linherited = !l.TargetIsRoot && inheritedOverrideNames.Contains(l.TargetName);
                         if (!TryTarget(l.TargetIsRoot, l.TargetName, inst, out var lt, out var lterr)) return lterr;
                         var lperr = WalkInitPath(ref lt, l.TargetIsRoot ? "this" : l.TargetName, l.TargetPath, "layout call");
                         if (lperr != null) return lperr;
@@ -402,7 +392,8 @@ namespace WinFormsDesigner.Engine
                         if (lm == null) return lname + " on " + lc.GetType().Name + " does not resolve to a Control layout member";
                         // A receiver reached through hops has an unknown static type, so a vendor member HIDING the
                         // framework one cannot be shown to be what C# bound — accept only the framework member there.
-                        if (l.TargetPath.Count > 0 && lm.DeclaringType != typeof(Control))
+                        // Likewise an inherited control, whose field's declared (binding) type this document never sees.
+                        if ((l.TargetPath.Count > 0 || linherited) && lm.DeclaringType != typeof(Control))
                             return lname + " through " + InitTargetName(l.TargetIsRoot ? "this" : l.TargetName, l.TargetPath) + " resolves to a hiding member whose binding is unprovable";
                         lm.Invoke(lc, l.Op == IrLayoutOp.Resume && l.HasArg ? new object[] { l.Arg } : Array.Empty<object>());
                         return null;
@@ -410,7 +401,6 @@ namespace WinFormsDesigner.Engine
 
                 case IrBeginInit b:
                     {
-                        if (inheritedOverrideNames.Contains(b.TargetName)) return "BeginInit on an inherited control is not supported";
                         if (!inst.TryGetValue(b.TargetName, out var o)) return "BeginInit unknown target " + b.TargetName;
                         var berr = WalkInitPath(ref o, b.TargetName, b.TargetPath, "BeginInit");
                         if (berr != null) return berr;
@@ -421,7 +411,6 @@ namespace WinFormsDesigner.Engine
                     }
                 case IrEndInit e:
                     {
-                        if (inheritedOverrideNames.Contains(e.TargetName)) return "EndInit on an inherited control is not supported";
                         if (!inst.TryGetValue(e.TargetName, out var o)) return "EndInit unknown target " + e.TargetName;
                         var eerr = WalkInitPath(ref o, e.TargetName, e.TargetPath, "EndInit");
                         if (eerr != null) return eerr;
@@ -483,6 +472,23 @@ namespace WinFormsDesigner.Engine
                         return null;
                     }
 
+                case IrSetChildIndex ci:
+                    {
+                        if (!TryTarget(ci.ParentIsRoot, ci.ParentName, inst, out var sparentObj, out var sperr)) return sperr;
+                        foreach (var hop in ci.ParentPath)
+                        {
+                            var mid = TypeDescriptor.GetProperties(sparentObj)[hop];
+                            if (mid == null) return "no property " + hop + " on " + sparentObj.GetType().Name;
+                            sparentObj = mid.GetValue(sparentObj);
+                            if (sparentObj == null) return "null container at " + hop;
+                        }
+                        if (sparentObj is not Control sparent) return "SetChildIndex parent is not a Control";
+                        if (!inst.TryGetValue(ci.ChildName, out var schildObj) || schildObj is not Control schild)
+                            return "SetChildIndex unknown child " + ci.ChildName;
+                        if (!ReferenceEquals(schild.Parent, sparent)) return "SetChildIndex child " + ci.ChildName + " is not parented there";
+                        sparent.Controls.SetChildIndex(schild, Math.Min(ci.Index, sparent.Controls.Count - 1));
+                        return null;
+                    }
                 case IrConstructLocalObject lo:
                     {
                         var locals = s_localObjects!;
@@ -822,6 +828,21 @@ namespace WinFormsDesigner.Engine
         }
 
         // -------------------------------------------------------- helpers -------------------------------------------
+
+        /// <summary>A ROOT path whose first hop is not a property of the root but names a seeded INHERITED control
+        /// (`this.panel1.Font`, `this.panel1.Controls.Add(...)` in a derived designer) is re-rooted at that control.
+        /// Returns the index of the first remaining hop (0 = unchanged). Needs at least <paramref name="minCount"/> hops.</summary>
+        private static int RedirectInheritedRootPath(ref object target, bool isRoot, List<string> path, int minCount,
+            Dictionary<string, object> inst, HashSet<string> inheritedNames, out bool redirected)
+        {
+            redirected = false;
+            if (!isRoot || path.Count < minCount) return 0;
+            if (TypeDescriptor.GetProperties(target)[path[0]] != null) return 0; // a real root property wins
+            if (!inheritedNames.Contains(path[0]) || !inst.TryGetValue(path[0], out var inherited)) return 0;
+            target = inherited;
+            redirected = true;
+            return 1;
+        }
 
         private static bool TryTarget(bool isRoot, string name, Dictionary<string, object> inst, out object target, out string? err)
         {
