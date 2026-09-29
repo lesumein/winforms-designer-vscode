@@ -11,6 +11,10 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Fixed
 
+- **net48: a control in front of an overlapping sibling is no longer painted behind it.** `Control.DrawToBitmap` on
+  .NET Framework paints overlapping children in reverse z-order, so a freshly dropped control (added at the front)
+  disappeared under a large sibling such as a `Chart` or a docked panel. The preview is now captured window by window
+  with `WM_PRINT`, back-to-front and clipped to each ancestor's client area.
 - **`new decimal(new int[] { ... })` no longer forces the compiled fallback.** VS serializes non-default
   `NumericUpDown` `Value`/`Minimum`/`Maximum`/`Increment` this way; `System.Decimal` is now on the construction
   allowlist (a pure value constructor).

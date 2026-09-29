@@ -2798,7 +2798,7 @@ namespace WinFormsDesigner.Engine.Net48
                     using (var big = new Bitmap(w * scale, h * scale, PixelFormat.Format32bppArgb))
                     {
                         big.SetResolution(96, 96);
-                        root.DrawToBitmap(big, new Rectangle(0, 0, w * scale, h * scale));
+                        ZOrderedCapture.DrawToBitmap(root, big, new Rectangle(0, 0, w * scale, h * scale));
                         OverlayProgressBarState(root, big);
                         using (var ms = new MemoryStream()) { big.Save(ms, ImageFormat.Png); return ms.ToArray(); }
                     }
@@ -2807,7 +2807,7 @@ namespace WinFormsDesigner.Engine.Net48
             }
             using (var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb))
             {
-                root.DrawToBitmap(bmp, new Rectangle(0, 0, w, h));
+                ZOrderedCapture.DrawToBitmap(root, bmp, new Rectangle(0, 0, w, h));
                 OverlayProgressBarState(root, bmp);
                 using (var ms = new MemoryStream()) { bmp.Save(ms, ImageFormat.Png); return ms.ToArray(); }
             }
