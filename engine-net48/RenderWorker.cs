@@ -2882,6 +2882,24 @@ namespace WinFormsDesigner.Engine.Net48
             }
         }
 
+        /// <summary>True when a visible control in FRONT of <paramref name="target"/> (a lower z-order index at the target's
+        /// level or at any ancestor's level up to <paramref name="root"/>) overlaps it. The dirty-region patch paints the
+        /// target alone, so it would be composited over that covering control; such a target takes the full frame.</summary>
+        private static bool IsCoveredFromFront(Control target, Control root)
+        {
+            for (Control current = target; current != root && current.Parent != null; current = current.Parent)
+            {
+                var parent = current.Parent;
+                int index = parent.Controls.GetChildIndex(current);
+                for (int i = 0; i < index; i++)
+                {
+                    var sibling = parent.Controls[i];
+                    if (sibling.Visible && sibling.Bounds.IntersectsWith(current.Bounds)) return true;
+                }
+            }
+            return false;
+        }
+
         private static IEnumerable<Control> DescendantControls(Control root)
         {
             yield return root;
@@ -2902,7 +2920,7 @@ namespace WinFormsDesigner.Engine.Net48
         {
             Control root = live.Root;
             int frameWidth = Math.Max(root.Width, 1), frameHeight = Math.Max(root.Height, 1);
-            if (target.Controls.Count != 0 || !SamePatchGeometry(beforeGeometry, root))
+            if (target.Controls.Count != 0 || !SamePatchGeometry(beforeGeometry, root) || IsCoveredFromFront(target, root))
                 return Snapshot(live);
 
             PrepareForDesignSurfaceCapture(root);

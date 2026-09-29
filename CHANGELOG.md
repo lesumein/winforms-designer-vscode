@@ -11,6 +11,9 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Fixed
 
+- **net48: a text edit on a control that is partly covered no longer paints over the covering control.** The
+  dirty-region fast path captured the edited leaf alone and composited it on top; a leaf overlapped by a control in
+  front of it now takes the full frame.
 - **"AnyCPU, prefer 32-bit" assemblies are no longer refused as x86.** A .NET Framework WinExe built with the default
   `Prefer32Bit` carries `32BITREQUIRED` together with `32BITPREFERRED`; the x86 gate read `32BITREQUIRED` alone and
   refused the form with `X86_WORKER_UNAVAILABLE`, although such an image loads into the x64 engine. Only
