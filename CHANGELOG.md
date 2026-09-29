@@ -11,6 +11,9 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Fixed
 
+- **`new decimal(new int[] { ... })` no longer forces the compiled fallback.** VS serializes non-default
+  `NumericUpDown` `Value`/`Minimum`/`Maximum`/`Increment` this way; `System.Decimal` is now on the construction
+  allowlist (a pure value constructor).
 - **Localized engine output is no longer garbled.** Exception text from the net48 engine is written in the system's
   ANSI code page (e.g. CP949 on Korean Windows) and was decoded as UTF-8 into replacement characters in the output
   channel. Non-UTF-8 engine output is now decoded with the system ANSI code page (read once from the registry).

@@ -78,6 +78,9 @@ namespace WinFormsDesigner.Engine
             // free like Padding. Constructed inline in ColumnStyles/RowStyles.Add(new ColumnStyle/RowStyle(...)).
             "System.Windows.Forms.ColumnStyle",
             "System.Windows.Forms.RowStyle",
+            // `new decimal(new int[] { lo, mid, hi, flags })` — how VS serializes every non-default NumericUpDown
+            // Value/Minimum/Maximum/Increment. A pure value constructor (it only validates the flags word).
+            "System.Decimal",
         };
 
         /// <summary>
