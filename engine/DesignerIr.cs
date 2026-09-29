@@ -44,7 +44,9 @@ namespace WinFormsDesigner.Engine
         // 4: IrDocument.NamespaceContext — the file's own `using`/namespace scope, so an UNQUALIFIED type name (legal
         //    C#, common in hand-written designer files) resolves instead of dropping the whole form to the compiled
         //    fallback. Same rule: a mismatched producer/executor pair must refuse each other, not half-read a document.
-        public const int SchemaVersion = 4;
+        // 5: designer data-object LOCALS — IrConstructLocalObject / IrSetLocalObjectProp / IrAddLocalObject statements and
+        //    the IrLocalObjectRef value (MSChart ChartArea/Series/Legend/Title, DataGridViewCellStyle). Same rule.
+        public const int SchemaVersion = 5;
         /// <summary>Max namespace candidates carried for unqualified type names (usings + enclosing namespace chain).
         /// Generous for real files, bounded so a forged document cannot make resolution quadratic.</summary>
         public const int MaxNamespaceContext = 128;
@@ -141,6 +143,14 @@ namespace WinFormsDesigner.Engine
     {
         public bool IsRoot { get; set; }
         public string Name { get; set; } = "";
+    }
+
+    /// <summary>A bare designer data-object LOCAL used as a value — `this.grid.ColumnHeadersDefaultCellStyle =
+    /// dataGridViewCellStyle1;`. Resolves only to a local constructed earlier by IrConstructLocalObject.</summary>
+    [Serializable]
+    public sealed class IrLocalObjectRef : IrValue
+    {
+        public string LocalName { get; set; } = "";
     }
 
     /// <summary>`new T[] { … }` — element TYPE is a name the executor resolves and validates; elements are IrValues.</summary>
@@ -341,6 +351,55 @@ namespace WinFormsDesigner.Engine
         public List<string> NodeLocalNames { get; set; } = new List<string>();
     }
 
+    // ---- Designer data-object LOCALS: VS serializes some non-component objects as InitializeComponent locals —
+    // MSChart's ChartArea/Series/Legend/Title (`this.chart1.ChartAreas.Add(chartArea1)`) and DataGridViewCellStyle
+    // (`this.grid.ColumnHeadersDefaultCellStyle = dataGridViewCellStyle1`). Like tree nodes they are plain data
+    // objects kept in an executor side-table, NOT sited components. The types are a closed set
+    // (IrLocalObjects.AllowedTypes); the executor binds each to its framework assembly and refuses anything else. --
+
+    /// <summary>`T local = new T();` — T in the closed set, parameterless ctor only, no initializer.</summary>
+    [Serializable]
+    public sealed class IrConstructLocalObject : IrStatement
+    {
+        public string LocalName { get; set; } = "";
+        public string TypeName { get; set; } = "";
+    }
+
+    /// <summary>`local.Prop = v;` / `local.AxisX.Maximum = v;` — PropertyPath walked on the local; every intermediate
+    /// object and the leaf's declaring type must come from a trusted framework assembly.</summary>
+    [Serializable]
+    public sealed class IrSetLocalObjectProp : IrStatement
+    {
+        public string LocalName { get; set; } = "";
+        public List<string> PropertyPath { get; set; } = new List<string>();
+        public IrValue Value { get; set; } = new IrNull();
+    }
+
+    /// <summary>`this.chart1.ChartAreas.Add(local);` — the resolved collection must be a trusted-framework IList.</summary>
+    [Serializable]
+    public sealed class IrAddLocalObject : IrStatement
+    {
+        public bool TargetIsRoot { get; set; }
+        public string TargetName { get; set; } = "";
+        public List<string> PropertyPath { get; set; } = new List<string>();
+        public string LocalName { get; set; } = "";
+    }
+
+    /// <summary>The closed set of data-object local types.</summary>
+    public static class IrLocalObjects
+    {
+        public const string ChartNamespace = "System.Windows.Forms.DataVisualization.Charting.";
+        public const string ChartAssemblyName = "System.Windows.Forms.DataVisualization";
+        public const string ChartAssemblyQualifier = ", System.Windows.Forms.DataVisualization, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35";
+        public const string ChartPublicKeyToken = "31bf3856ad364e35";
+        public const string DataGridViewCellStyle = "System.Windows.Forms.DataGridViewCellStyle";
+        public static readonly HashSet<string> AllowedTypes = new HashSet<string>(StringComparer.Ordinal)
+        {
+            ChartNamespace + "ChartArea", ChartNamespace + "Series", ChartNamespace + "Legend", ChartNamespace + "Title",
+            DataGridViewCellStyle,
+        };
+    }
+
     // -------------------------------------------------------------- document -------------------------------------
 
     /// <summary>One parsed InitializeComponent, plus the coverage report the per-form mode classifier reads.
@@ -401,10 +460,11 @@ namespace WinFormsDesigner.Engine
         {
             typeof(IrNull), typeof(IrBool), typeof(IrChar), typeof(IrString), typeof(IrNumber), typeof(IrEnum),
             typeof(IrKnownCtor), typeof(IrStaticFactory), typeof(IrStaticRead), typeof(IrComponentRef),
-            typeof(IrArray), typeof(IrResourceRef), typeof(IrCast),
+            typeof(IrArray), typeof(IrResourceRef), typeof(IrCast), typeof(IrLocalObjectRef),
             typeof(IrConstructComponent), typeof(IrSetProperty), typeof(IrAddControl), typeof(IrAddCollectionItem),
             typeof(IrSetExtender), typeof(IrApplyResources), typeof(IrBeginInit), typeof(IrEndInit), typeof(IrWireEvent), typeof(IrLayoutCall),
             typeof(IrConstructTreeNode), typeof(IrSetTreeNodeProp), typeof(IrAddTreeNodes),
+            typeof(IrConstructLocalObject), typeof(IrSetLocalObjectProp), typeof(IrAddLocalObject),
         };
 
         /// <summary>Validate structure; returns null when valid, else a diagnostic reason (the caller refuses the
@@ -518,6 +578,19 @@ namespace WinFormsDesigner.Engine
                     if (ta.NodeLocalNames == null || ta.NodeLocalNames.Count == 0 || ta.NodeLocalNames.Count > IrLimits.MaxArrayItems) return "invalid tree-node add list";
                     foreach (var n in ta.NodeLocalNames) { if (!ValidIdent(n)) return "invalid tree-node ref"; if (OverBudget(ref chars, n)) return "string budget exceeded"; }
                     return null;
+                case IrConstructLocalObject lo:
+                    if (!ValidIdent(lo.LocalName)) return "invalid local name";
+                    if (!IrLocalObjects.AllowedTypes.Contains(lo.TypeName ?? "")) return "local object type not allowed";
+                    return OverBudget(ref chars, lo.LocalName) || OverBudget(ref chars, lo.TypeName) ? "string budget exceeded" : null;
+                case IrSetLocalObjectProp lp:
+                    if (!ValidIdent(lp.LocalName)) return "invalid local name";
+                    var lpe = CheckPath(lp.PropertyPath, min: 1); if (lpe != null) return lpe;
+                    return CheckValue(lp.Value, 0, ref nodes, ref chars);
+                case IrAddLocalObject la:
+                    if (!ValidTarget(la.TargetIsRoot, la.TargetName)) return "invalid local add target";
+                    var lae = CheckPath(la.PropertyPath, min: 1); if (lae != null) return lae;
+                    if (!ValidIdent(la.LocalName)) return "invalid local ref";
+                    return OverBudget(ref chars, la.LocalName) ? "string budget exceeded" : null;
                 default: return "unhandled statement type " + s.GetType().Name; // unreachable while Closed is exact
             }
         }
@@ -564,6 +637,9 @@ namespace WinFormsDesigner.Engine
                 case IrStaticRead r:
                     if (!ValidTypeName(r.TypeName) || !ValidIdent(r.Member)) return "invalid static read";
                     return OverBudget(ref chars, r.TypeName) || OverBudget(ref chars, r.Member) ? "string budget exceeded" : null;
+                case IrLocalObjectRef lr:
+                    if (!ValidIdent(lr.LocalName)) return "invalid local ref";
+                    return OverBudget(ref chars, lr.LocalName) ? "string budget exceeded" : null;
                 case IrComponentRef cr:
                     if (cr.IsRoot) return string.IsNullOrEmpty(cr.Name) ? null : "root ref carries a name";
                     if (!ValidIdent(cr.Name)) return "invalid component ref";

@@ -20,6 +20,17 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
   Form` and the form was rendered by constructing the compiled type (running its constructor and `Load`). The two flags
   are now set through `Control`'s own non-public property.
 
+### Added
+
+- **Designer data-object locals are interpreted.** VS serializes MSChart's `ChartArea`/`Series`/`Legend`/`Title`
+  and `DataGridViewCellStyle` as `InitializeComponent` locals, which the IR builder reported as unrepresentable, so every
+  form with a chart or a styled grid went to the compiled fallback (running the form's constructor/`Load`; charts could
+  render blank when the constructor set `Opacity = 0` or `WS_EX_COMPOSITED`). New closed IR statements
+  (`IrConstructLocalObject`, `IrSetLocalObjectProp`, `IrAddLocalObject`) and value (`IrLocalObjectRef`) model the
+  construct / property path / collection `Add` / assignment shapes for exactly those types. The executor binds them by
+  strong name (the chart assembly GAC-only on .NET Framework) and requires every property hop and target collection to
+  come from a trusted framework assembly. IR `SchemaVersion` 4 → 5.
+
 ## [2.0.0] - 2026-08-28
 
 **The v2 managed designer foundation ships as an explicitly bounded release.** It freezes the generated protocol,

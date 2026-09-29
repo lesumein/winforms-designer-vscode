@@ -529,6 +529,9 @@ namespace WinFormsDesigner.Engine
                 case IrComponentRef r:
                     builder.Append("ref:").Append(Target(r.IsRoot, r.Name));
                     break;
+                case IrLocalObjectRef l:
+                    builder.Append("local:").Append(l.LocalName);
+                    break;
                 case IrArray a:
                     builder.Append("array:").Append(a.ElementTypeName).Append('[');
                     AppendValues(builder, a.Items);

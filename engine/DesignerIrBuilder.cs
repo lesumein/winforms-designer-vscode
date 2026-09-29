@@ -84,6 +84,7 @@ namespace WinFormsDesigner.Engine
             var containerNames = new HashSet<string>(StringComparer.Ordinal);
             var resxVars = new HashSet<string>(StringComparer.Ordinal);
             var treeNodeLocals = new HashSet<string>(StringComparer.Ordinal);
+            var objectLocals = new HashSet<string>(StringComparer.Ordinal);
             var typeCertain = new HashSet<string>(StringComparer.Ordinal);
             var constructedOnce = new HashSet<string>(StringComparer.Ordinal);
             string designedShort = LastTypeSegment(doc.DesignedTypeName);
@@ -103,6 +104,8 @@ namespace WinFormsDesigner.Engine
                     }
                     else if (typeName == "TreeNode")
                         foreach (var v in lds.Declaration.Variables) treeNodeLocals.Add(v.Identifier.Text);
+                    else if (IrLocalObjects.AllowedTypes.Contains(LocalTypeText(lds.Declaration.Type.ToString())))
+                        foreach (var v in lds.Declaration.Variables) objectLocals.Add(v.Identifier.Text);
                 }
                 if (stmt is ExpressionStatementSyntax es0 && es0.Expression is AssignmentExpressionSyntax a0
                     && Flatten(a0.Left) is { Count: 1 } lhs && fieldNames.Contains(lhs[0])
@@ -123,6 +126,8 @@ namespace WinFormsDesigner.Engine
             }
 
             var ctx = new Ctx(fieldNames, containerNames, resxVars, treeNodeLocals, typeCertain, designedMethodNames);
+            // A data-object local that shadows a field would make `x.Prop = v` ambiguous for the classifier — it stays a gap.
+            foreach (var ol in objectLocals) if (!fieldNames.Contains(ol)) ctx.ObjectLocals.Add(ol);
             foreach (var stmt in init.Body.Statements)
             {
                 doc.TotalSourceStatements++;
@@ -168,6 +173,8 @@ namespace WinFormsDesigner.Engine
             /// <summary>Method names the designed class declares in THIS file — a member of the designed class hides
             /// the base's, and the interpreted root (a base instance) cannot carry it.</summary>
             public readonly HashSet<string> DesignedMethodNames;
+            /// <summary>Designer data-object locals — see IrConstructLocalObject.</summary>
+            public readonly HashSet<string> ObjectLocals = new HashSet<string>(StringComparer.Ordinal);
             public Ctx(HashSet<string> f, HashSet<string> c, HashSet<string> r, HashSet<string> tn, HashSet<string> tc, HashSet<string> dm)
             { Fields = f; Containers = c; ResxVars = r; TreeNodeLocals = tn; TypeCertain = tc; DesignedMethodNames = dm; }
         }
@@ -201,6 +208,7 @@ namespace WinFormsDesigner.Engine
                 if (ld.Declaration.Variables.Any(v => ctx.ResxVars.Contains(v.Identifier.Text))) return NoOp();
                 if (LastTypeSegment(ld.Declaration.Type.ToString()) == "ComponentResourceManager") return NoOp();
                 if (IsWinFormsTreeNodeType(ld.Declaration.Type.ToString())) return ClassifyTreeNodeLocal(ld, ctx);
+                if (IrLocalObjects.AllowedTypes.Contains(LocalTypeText(ld.Declaration.Type.ToString()))) return ClassifyObjectLocal(ld, ctx);
                 return Gap(Trim(stmt));
             }
 
@@ -271,10 +279,46 @@ namespace WinFormsDesigner.Engine
             return built.Count == 0 ? NoOp() : Rep(built);
         }
 
+        /// <summary>`T local = new T();` for T in IrLocalObjects.AllowedTypes — the parameterless ctor of the SAME type, no
+        /// initializer. Any other shape is a gap (honest compiled fallback).</summary>
+        private static (List<IrStatement>, bool, string?) ClassifyObjectLocal(LocalDeclarationStatementSyntax ld, Ctx ctx)
+        {
+            string declared = LocalTypeText(ld.Declaration.Type.ToString());
+            var built = new List<IrStatement>();
+            foreach (var v in ld.Declaration.Variables)
+            {
+                string name = v.Identifier.Text;
+                if (!ctx.ObjectLocals.Contains(name) || !IrValidate.ValidIdent(name)) return Gap(Trim(ld));
+                if (v.Initializer?.Value is not ObjectCreationExpressionSyntax oc
+                    || (oc.ArgumentList?.Arguments.Count ?? 0) != 0 || oc.Initializer != null
+                    || LocalTypeText(oc.Type.ToString()) != declared)
+                    return Gap("unrepresentable local " + Trim(ld));
+                built.Add(new IrConstructLocalObject { LocalName = name, TypeName = declared });
+            }
+            return built.Count == 0 ? NoOp() : Rep(built);
+        }
+
+        /// <summary>A local's type as written, without whitespace or a leading `global::`.</summary>
+        private static string LocalTypeText(string s)
+        {
+            var t = NormalizeTypeText(s);
+            return t.StartsWith("global::", StringComparison.Ordinal) ? t.Substring(8) : t;
+        }
+
         private static (List<IrStatement>, bool, string?) ClassifyAssignment(AssignmentExpressionSyntax asg, Ctx ctx)
         {
             var chain = Flatten(asg.Left);
             if (chain.Count == 0) return Gap(Trim(asg));
+
+            // data-object local property: `chartArea1.AxisX.Maximum = 100D;` — a bare local (never `this.`), so it must be
+            // intercepted before the root-property fallback below.
+            if (ctx.ObjectLocals.Contains(chain[0]) && ChainRoot(asg.Left) is IdentifierNameSyntax)
+            {
+                if (chain.Count < 2 || chain.Count - 1 > IrLimits.MaxPathLength) return Gap(Trim(asg));
+                var lv = ClassifyValue(asg.Right, ctx);
+                if (lv == null) return Gap(Trim(asg));
+                return One(new IrSetLocalObjectProp { LocalName = chain[0], PropertyPath = chain.Skip(1).ToList(), Value = lv });
+            }
 
             // tree-node local property: `treeNode1.Name = "…"` — chain[0] is a tree-node LOCAL (NOT a field), so it must
             // be intercepted BEFORE the root-property fallback below (which would mis-target root.treeNode1.Name).
@@ -480,6 +524,23 @@ namespace WinFormsDesigner.Engine
                 return Gap(Trim(inv));
             }
 
+            // `this.chart1.ChartAreas.Add(chartArea1);` — attach a data-object local to a field's collection.
+            if (method == "Add" && inv.ArgumentList.Arguments.Count == 1 && PlainArgs(inv)
+                && inv.ArgumentList.Arguments[0].Expression is IdentifierNameSyntax localArg
+                && ctx.ObjectLocals.Contains(localArg.Identifier.Text))
+            {
+                var lrecv = Flatten(ma.Expression);
+                if (lrecv.Count >= 2 && ctx.Fields.Contains(lrecv[0]) && lrecv.Count - 1 <= IrLimits.MaxPathLength)
+                    return One(new IrAddLocalObject
+                    {
+                        TargetIsRoot = false,
+                        TargetName = lrecv[0],
+                        PropertyPath = lrecv.Skip(1).ToList(),
+                        LocalName = localArg.Identifier.Text,
+                    });
+                return Gap(Trim(inv));
+            }
+
             // collection add: `this.f.Coll.Add(item)` / `.AddRange(new T[]{...})`, and Controls.Add (special-cased).
             if (method is "Add" or "AddRange")
             {
@@ -615,6 +676,10 @@ namespace WinFormsDesigner.Engine
             if (depth > IrLimits.MaxValueDepth) return null;
             switch (expr)
             {
+                // a designer data-object local used as a value (`= dataGridViewCellStyle1`)
+                case IdentifierNameSyntax lid when ctx.ObjectLocals.Contains(lid.Identifier.Text):
+                    return new IrLocalObjectRef { LocalName = lid.Identifier.Text };
+
                 case LiteralExpressionSyntax lit:
                     return LiteralValue(lit);
 
@@ -882,6 +947,13 @@ namespace WinFormsDesigner.Engine
         /// compare equal while two different namespaces sharing a simple name do not. Deliberately textual: the
         /// front-end has no semantic model, so equality here means "written the same way" — which is what
         /// VS-generated code always is for a field declaration and the construction assigned into it.</summary>
+        /// <summary>The left-most expression of a member-access chain (`a` in `a.b.c`, `this` in `this.a`).</summary>
+        private static ExpressionSyntax ChainRoot(ExpressionSyntax e)
+        {
+            while (e is MemberAccessExpressionSyntax m) e = m.Expression;
+            return e;
+        }
+
         private static string NormalizeTypeText(string s) => new string(s.Where(c => !char.IsWhiteSpace(c)).ToArray());
 
         private static ExpressionSyntax Unparen(ExpressionSyntax e)

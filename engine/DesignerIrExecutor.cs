@@ -84,7 +84,19 @@ namespace WinFormsDesigner.Engine
         /// <summary>Replay <paramref name="doc"/> onto <paramref name="root"/> (already constructed by the host as
         /// the immediate BASE type — VS model). Returns Ok with the instance table, or a fail-closed reason. Only
         /// call for a FullCoverage document — a partial IR is a compiled-fallback case, decided by the caller.</summary>
+        /// <summary>Data-object locals of the document currently executing on this thread — read by TryMaterialize for
+        /// IrLocalObjectRef. Execute is synchronous on one thread, so a thread-static scope is exact.</summary>
+        [ThreadStatic] private static Dictionary<string, object>? s_localObjects;
+
         public static IrExecutionResult Execute(IrDocument doc, object root, IIrHost host)
+        {
+            var outerLocals = s_localObjects;
+            s_localObjects = new Dictionary<string, object>(StringComparer.Ordinal);
+            try { return ExecuteCore(doc, root, host); }
+            finally { s_localObjects = outerLocals; }
+        }
+
+        private static IrExecutionResult ExecuteCore(IrDocument doc, object root, IIrHost host)
         {
             if (root == null) return IrExecutionResult.Fail("null root");
             if (host == null) return IrExecutionResult.Fail("null host");
@@ -471,6 +483,56 @@ namespace WinFormsDesigner.Engine
                         return null;
                     }
 
+                case IrConstructLocalObject lo:
+                    {
+                        var locals = s_localObjects!;
+                        if (locals.ContainsKey(lo.LocalName)) return "duplicate local " + lo.LocalName;
+                        if (!IrLocalObjects.AllowedTypes.Contains(lo.TypeName)) return "local object type not allowed: " + lo.TypeName;
+                        var t = ResolveLocalObjectType(lo.TypeName);
+                        if (t == null || !IsTrustedLocalObjectType(t)) return "unresolved local object type " + lo.TypeName;
+                        locals[lo.LocalName] = Activator.CreateInstance(t)
+                            ?? throw new InvalidOperationException("null local object " + lo.LocalName);
+                        return null;
+                    }
+                case IrSetLocalObjectProp lp:
+                    {
+                        if (!s_localObjects!.TryGetValue(lp.LocalName, out var target)) return "unknown local " + lp.LocalName;
+                        for (int i = 0; i < lp.PropertyPath.Count - 1; i++)
+                        {
+                            var mid = TypeDescriptor.GetProperties(target)[lp.PropertyPath[i]];
+                            if (mid == null) return "no property " + lp.PropertyPath[i] + " on " + target.GetType().Name;
+                            target = mid.GetValue(target);
+                            if (target == null) return "null intermediate at " + lp.PropertyPath[i];
+                            if (!IsTrustedLocalObjectType(target.GetType())) return "local hop leaves the framework at " + lp.PropertyPath[i];
+                        }
+                        string leaf = lp.PropertyPath[lp.PropertyPath.Count - 1];
+                        var pd = TypeDescriptor.GetProperties(target)[leaf];
+                        if (pd == null) return "no property " + leaf + " on " + target.GetType().Name;
+                        if (!IsTrustedLocalObjectType(pd.ComponentType)) return "local property not declared by the framework: " + leaf;
+                        if (pd.IsReadOnly) return "property " + leaf + " is read-only";
+                        if (!TryMaterialize(lp.Value, pd.PropertyType, inst, host, out var val, out var verr)) return verr;
+                        pd.SetValue(target, Coerce(val, pd.PropertyType));
+                        return null;
+                    }
+                case IrAddLocalObject la:
+                    {
+                        if (!la.TargetIsRoot && inheritedOverrideNames.Contains(la.TargetName))
+                            return "collection mutation of an inherited control is not supported";
+                        if (!s_localObjects!.TryGetValue(la.LocalName, out var element)) return "unknown local " + la.LocalName;
+                        if (!TryTarget(la.TargetIsRoot, la.TargetName, inst, out var owner, out var oerr)) return oerr;
+                        foreach (var hop in la.PropertyPath)
+                        {
+                            var mid = TypeDescriptor.GetProperties(owner)[hop];
+                            if (mid == null) return "no property " + hop + " on " + owner.GetType().Name;
+                            owner = mid.GetValue(owner);
+                            if (owner == null) return "null collection at " + hop;
+                        }
+                        if (!IsTrustedLocalObjectType(owner.GetType()) || owner is not IList coll)
+                            return "local add target is not a framework collection";
+                        coll.Add(element);
+                        return null;
+                    }
+
                 case IrWireEvent:
                     return null; // inert: the design surface never wires source handlers (VS model)
 
@@ -578,6 +640,36 @@ namespace WinFormsDesigner.Engine
         private static bool IsProtectedDesignerFlag(string name) =>
             name == "DoubleBuffered" || name == "ResizeRedraw";
 
+        /// <summary>Resolve a data-object local type by strong name — never by searching loaded assemblies, so a project
+        /// type impersonating the FullName cannot be picked up.</summary>
+        private static Type? ResolveLocalObjectType(string typeName)
+        {
+            if (typeName == IrLocalObjects.DataGridViewCellStyle) return typeof(DataGridViewCellStyle);
+            if (typeName.StartsWith(IrLocalObjects.ChartNamespace, StringComparison.Ordinal))
+                return Type.GetType(typeName + IrLocalObjects.ChartAssemblyQualifier, throwOnError: false);
+            return null;
+        }
+
+        /// <summary>A type a data-object local (or one of its property hops) may have: a trusted framework assembly, or the
+        /// framework System.Windows.Forms.DataVisualization assembly — matched by simple name AND Microsoft's public key
+        /// token, and on .NET Framework also required to come from the GAC, so a same-named assembly shipped next to the
+        /// project cannot impersonate it.</summary>
+        private static bool IsTrustedLocalObjectType(Type? t)
+        {
+            if (t == null) return false;
+            if (DesignerAllowlists.IsTrustedFrameworkType(t)) return true;
+            var asm = t.Assembly;
+            var name = asm.GetName();
+            if (name.Name != IrLocalObjects.ChartAssemblyName) return false;
+            var token = name.GetPublicKeyToken();
+            if (token == null || BitConverter.ToString(token).Replace("-", "").ToLowerInvariant() != IrLocalObjects.ChartPublicKeyToken)
+                return false;
+#if NETFRAMEWORK
+            if (!asm.GlobalAssemblyCache) return false;
+#endif
+            return true;
+        }
+
         private static bool TryMaterialize(IrValue v, Type target, Dictionary<string, object> inst, IIrHost host, out object? value, out string? err)
         {
             value = null; err = null;
@@ -589,6 +681,12 @@ namespace WinFormsDesigner.Engine
                 case IrString s: value = s.Value; return true;
                 case IrNumber n:
                     return TryNumber(n, out value, out err);
+
+                case IrLocalObjectRef lr:
+                    if (s_localObjects == null || !s_localObjects.TryGetValue(lr.LocalName, out var local))
+                    { err = "unknown local " + lr.LocalName; return false; }
+                    if (!target.IsInstanceOfType(local)) { err = "local " + lr.LocalName + " is not a " + target.Name; return false; }
+                    value = local; return true;
 
                 case IrComponentRef r:
                     if (r.IsRoot) { value = inst[""]; return true; }
