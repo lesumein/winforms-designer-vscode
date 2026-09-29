@@ -35,6 +35,7 @@
     <Compile Include="..\..\engine-net48\ToolboxAssemblyScanner.cs" Link="ToolboxScan\ToolboxAssemblyScanner.cs" />
     <Compile Include="..\..\engine-net48\CompiledDescriber.cs" Link="DailyLoop\CompiledDescriber.cs" />
     <Compile Include="..\..\engine-net48\SourceMetadata.cs" Link="DailyLoop\SourceMetadata.cs" />
+    <Compile Include="..\..\engine-net48\ZOrderedCapture.cs" Link="Capture\ZOrderedCapture.cs" />
   </ItemGroup>
 
   <!-- The SAME shared sources the engines compile-link — proving they build and behave identically on net48. -->
@@ -60,6 +61,7 @@
 
   <ItemGroup>
     <Reference Include="System.Design" />
+    <Reference Include="System.Windows.Forms.DataVisualization" />
   </ItemGroup>
 
 </Project>
