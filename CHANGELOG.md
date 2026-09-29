@@ -11,6 +11,10 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Fixed
 
+- **"AnyCPU, prefer 32-bit" assemblies are no longer refused as x86.** A .NET Framework WinExe built with the default
+  `Prefer32Bit` carries `32BITREQUIRED` together with `32BITPREFERRED`; the x86 gate read `32BITREQUIRED` alone and
+  refused the form with `X86_WORKER_UNAVAILABLE`, although such an image loads into the x64 engine. Only
+  `32BITREQUIRED` without `32BITPREFERRED` now means x86.
 - **A control dropped on a derived (inherited) form is no longer hidden behind the base's controls.** The base's
   `InitializeComponent` adds its controls first, so they sit in front of anything the derived file adds; the new
   control was added at the back and was invisible (only its selection frame showed) — also at runtime. The add now

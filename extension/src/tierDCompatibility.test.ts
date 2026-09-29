@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { activeXControlsInDesignerSource, peImageRequiresX86 } from './tierDCompatibility';
 
-function pe32(options: { cli?: boolean; required32?: boolean }): Uint8Array {
+function pe32(options: { cli?: boolean; required32?: boolean; preferred32?: boolean }): Uint8Array {
   const bytes = Buffer.alloc(1024);
   bytes.write('MZ', 0, 'ascii');
   bytes.writeUInt32LE(0x80, 0x3c);
@@ -18,7 +18,7 @@ function pe32(options: { cli?: boolean; required32?: boolean }): Uint8Array {
   bytes.writeUInt32LE(0x200, section + 20);
   if (options.cli) {
     bytes.writeUInt32LE(0x2000, optional + 96 + 14 * 8);
-    bytes.writeUInt32LE(options.required32 ? 0x3 : 0x1, 0x200 + 16);
+    bytes.writeUInt32LE((options.required32 ? 0x3 : 0x1) | (options.preferred32 ? 0x20000 : 0), 0x200 + 16);
   }
   return bytes;
 }
@@ -110,5 +110,7 @@ describe('Tier-D compatibility detection', () => {
     expect(peImageRequiresX86(pe32({}))).toBe(true);
     expect(peImageRequiresX86(pe32({ cli: true, required32: true }))).toBe(true);
     expect(peImageRequiresX86(pe32({ cli: true, required32: false }))).toBe(false);
+    // AnyCPU "prefer 32-bit" (the .NET Framework WinExe default) sets 32BITREQUIRED | 32BITPREFERRED: not x86-only
+    expect(peImageRequiresX86(pe32({ cli: true, required32: true, preferred32: true }))).toBe(false);
   });
 });

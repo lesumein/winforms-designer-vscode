@@ -227,7 +227,9 @@ function rvaToFileOffset(bytes: Buffer, sectionTable: number, sections: number, 
 }
 
 /** True only when a PE image actually requires an x86 process. Managed AnyCPU assemblies also carry IMAGE_FILE_MACHINE_I386,
- * so the CLR 32BITREQUIRED flag is authoritative for managed images; native I386 images without a CLR header are x86. */
+ * so the CLR flags are authoritative for managed images; native I386 images without a CLR header are x86. An "AnyCPU, prefer
+ * 32-bit" build (the .NET Framework WinExe default, Prefer32Bit) sets 32BITREQUIRED *together with* 32BITPREFERRED — that
+ * image still loads into a 64-bit process, so only 32BITREQUIRED without 32BITPREFERRED means x86. */
 export function peImageRequiresX86(bytes: Uint8Array): boolean {
   const buffer = Buffer.from(bytes);
   if (buffer.length < 64 || buffer[0] !== 0x4d || buffer[1] !== 0x5a) return false;
@@ -247,7 +249,10 @@ export function peImageRequiresX86(bytes: Uint8Array): boolean {
   const sectionTable = optional + optionalSize;
   const cli = rvaToFileOffset(buffer, sectionTable, sections, cliRva);
   const flags = cli === null ? null : uint32(buffer, cli + 16);
-  return flags === null || (flags & 0x2) !== 0;
+  const COMIMAGE_FLAGS_32BITREQUIRED = 0x2;
+  const COMIMAGE_FLAGS_32BITPREFERRED = 0x20000;
+  return flags === null
+    || ((flags & COMIMAGE_FLAGS_32BITREQUIRED) !== 0 && (flags & COMIMAGE_FLAGS_32BITPREFERRED) === 0);
 }
 
 export function assemblyRequiresX86(filePath: string): boolean {
