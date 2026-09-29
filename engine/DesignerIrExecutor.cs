@@ -305,6 +305,18 @@ namespace WinFormsDesigner.Engine
                         }
                         string leaf = p.PropertyPath[p.PropertyPath.Count - 1];
                         var pd = TypeDescriptor.GetProperties(target)[leaf];
+                        if (pd == null && target is Control && IsProtectedDesignerFlag(leaf))
+                        {
+                            // Control.DoubleBuffered / ResizeRedraw are PROTECTED, so TypeDescriptor does not list them,
+                            // yet VS serializes `this.DoubleBuffered = true;` whenever the property grid sets it. Without
+                            // this, every such form drops to the compiled fallback — the path that runs the user's code.
+                            // Exactly these two framework-declared bool flags; the setter is Control's own.
+                            var flag = typeof(Control).GetProperty(leaf, BindingFlags.Instance | BindingFlags.NonPublic);
+                            if (flag == null || !flag.CanWrite) return "no property " + leaf + " on " + target.GetType().Name;
+                            if (!TryMaterialize(p.Value, flag.PropertyType, inst, host, out var flagVal, out var flagErr)) return flagErr;
+                            flag.SetValue(target, flagVal);
+                            return null;
+                        }
                         if (pd == null) return "no property " + leaf + " on " + target.GetType().Name;
                         if (!TryMaterialize(p.Value, pd.PropertyType, inst, host, out var val, out var verr)) return verr;
                         if (pd.IsReadOnly) return "property " + leaf + " is read-only";
@@ -561,6 +573,10 @@ namespace WinFormsDesigner.Engine
         }
 
         // -------------------------------------------------------- values --------------------------------------------
+
+        /// <summary>Protected <see cref="Control"/> flags the VS designer serializes on the root/child controls.</summary>
+        private static bool IsProtectedDesignerFlag(string name) =>
+            name == "DoubleBuffered" || name == "ResizeRedraw";
 
         private static bool TryMaterialize(IrValue v, Type target, Dictionary<string, object> inst, IIrHost host, out object? value, out string? err)
         {

@@ -9,6 +9,13 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ## [Unreleased]
 
+### Fixed
+
+- **net48: `this.DoubleBuffered = true;` no longer forces the compiled fallback.** `Control.DoubleBuffered` and
+  `ResizeRedraw` are protected, so the interpreter's `TypeDescriptor` lookup failed with `no property DoubleBuffered on
+  Form` and the form was rendered by constructing the compiled type (running its constructor and `Load`). The two flags
+  are now set through `Control`'s own non-public property.
+
 ## [2.0.0] - 2026-08-28
 
 **The v2 managed designer foundation ships as an explicitly bounded release.** It freezes the generated protocol,
