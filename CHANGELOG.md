@@ -11,6 +11,9 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Fixed
 
+- **Localized engine output is no longer garbled.** Exception text from the net48 engine is written in the system's
+  ANSI code page (e.g. CP949 on Korean Windows) and was decoded as UTF-8 into replacement characters in the output
+  channel. Non-UTF-8 engine output is now decoded with the system ANSI code page (read once from the registry).
 - **net48: a user-code exception while pumping no longer kills the engine.** An exception thrown from a WndProc
   dispatched by the STA thread's blocking wait (a `UserControl`'s `Load`, a `RadioButton` `Click` raised by focus) had
   no managed frame to land in and terminated the whole net48 engine process. Such exceptions are now logged to the

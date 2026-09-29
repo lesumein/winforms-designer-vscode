@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execFileSync, ChildProcess } from 'child_process';
 import { createHash, randomUUID } from 'crypto';
 import * as net from 'net';
 import * as path from 'path';
@@ -91,6 +91,26 @@ export const PROBE_DIRS_ENV = 'WINFORMS_DESIGNER_PROBE_DIRS';
 * A random UUID removes the collision; the `winforms-designer-` prefix keeps the handle recognizable in
 * diagnostics / handle lists (`\\.\pipe\winforms-designer-…`, 54 chars, well inside the Windows pipe-name limit).
 */
+let legacyEncodingLabel: string | null | undefined;
+
+/** WHATWG TextDecoder label for the Windows ANSI code page (the one a .NET Framework console app writes in), read once
+ *  from the registry and only when an engine emits non-UTF-8 bytes. null when it cannot be determined. */
+function legacyCodePageEncoding(): string | null {
+  if (legacyEncodingLabel !== undefined) return legacyEncodingLabel;
+  legacyEncodingLabel = null;
+  if (process.platform !== 'win32') return legacyEncodingLabel;
+  try {
+    const out = execFileSync('reg', ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage', '/v', 'ACP'],
+      { encoding: 'utf8', windowsHide: true, timeout: 2000 });
+    const cp = /ACP\s+REG_SZ\s+(\d+)/.exec(out)?.[1];
+    if (cp) {
+      legacyEncodingLabel = cp === '932' ? 'shift_jis' : cp === '936' ? 'gbk' : cp === '949' ? 'euc-kr'
+        : cp === '950' ? 'big5' : 'windows-' + cp;
+    }
+  } catch { /* leave null: fall back to the UTF-8 decode */ }
+  return legacyEncodingLabel;
+}
+
 export function newPipeName(): string {
   return `winforms-designer-${randomUUID()}`;
 }
@@ -116,9 +136,20 @@ export async function startEngine(engineDllPath: string, opts: StartOptions = {}
     isExe ? ['--pipe', pipeName] : [engineDllPath, '--pipe', pipeName],
     { stdio: ['ignore', 'pipe', 'pipe'], env },
   );
+  // The net48 engine (and the CLR's own unhandled-exception printer) writes stdout/stderr in the ANSI code page, so
+  // on e.g. a Korean system localized exception text arrives as CP949 and `Buffer.toString()` turned it into U+FFFD.
+  // Valid UTF-8 is kept as is; anything else is decoded as the legacy code page the engine actually used.
+  const decodeEngineOutput = (d: Buffer): string => {
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(d); } catch { /* not UTF-8 */ }
+    const legacy = legacyCodePageEncoding();
+    if (legacy) {
+      try { return new TextDecoder(legacy).decode(d); } catch { /* label unsupported by this runtime */ }
+    }
+    return d.toString();
+  };
   const startupOutput: string[] = [];
   const capture = (d: Buffer): void => {
-    const line = '[engine] ' + d.toString().trimEnd();
+    const line = '[engine] ' + decodeEngineOutput(d).trimEnd();
     startupOutput.push(line);
     log(line);
   };
