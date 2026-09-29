@@ -1885,6 +1885,9 @@ namespace WinFormsDesigner.Engine.Net48
                         ctl.Size = new Size(requestedWidth, requestedHeight);
                     }
                     parent.Controls.Add(ctl);
+                    // A dropped control goes on TOP, as in Visual Studio (Controls.Add appends = back of the z-order;
+                    // in a derived designer the base's controls would otherwise cover it).
+                    parent.Controls.SetChildIndex(ctl, 0);
                     if (!string.IsNullOrEmpty(newId))
                     {
                         live.FieldNames[ctl] = newId;

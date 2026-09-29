@@ -2652,7 +2652,31 @@ namespace WinFormsDesigner.Engine
                     projectControls = EnumerateProjectControls(ResolveAsmForList(designerFilePath, controlAssemblyPath));
                 }
             }
-            return DesignerControlEditor.AddControl(src, parentId, controlTypeKey, projectControls, locX, locY, autoScaleDimensions, width, height);
+            return DesignerControlEditor.AddControl(src, parentId, controlTypeKey, projectControls, locX, locY, autoScaleDimensions, width, height,
+                derivedDesigner: IsDerivedDesigner(designerFilePath, src));
+        }
+
+        /// <summary>Whether the designed class derives from something other than Form / UserControl (read from the
+        /// code-behind partial, which is where VS declares the base) — i.e. whether its parent containers can already
+        /// hold controls its base type added. Unknown (no code-behind, no base clause) = not derived.</summary>
+        private static bool IsDerivedDesigner(string designerFilePath, string designerSource)
+        {
+            try
+            {
+                var designed = FormClassResolver.FormClass(CSharpSyntaxTree.ParseText(designerSource).GetRoot());
+                string? main = SiblingMainFile(designerFilePath);
+                if (designed == null || main == null || !File.Exists(main)) return false;
+                var mainRoot = CSharpSyntaxTree.ParseText(File.ReadAllText(main)).GetRoot();
+                foreach (var cls in mainRoot.DescendantNodes().OfType<ClassDeclarationSyntax>())
+                {
+                    if (cls.Identifier.Text != designed.Identifier.Text || cls.BaseList == null) continue;
+                    var first = cls.BaseList.Types.FirstOrDefault()?.Type.ToString() ?? "";
+                    string simple = first.Substring(first.LastIndexOf('.') + 1);
+                    return simple.Length != 0 && simple != "Form" && simple != "UserControl";
+                }
+            }
+            catch { /* a best-effort hint: fall back to the plain add */ }
+            return false;
         }
 
         /// <summary>Add a control to an already-localizable form. The ordinary bounded add composes the structural

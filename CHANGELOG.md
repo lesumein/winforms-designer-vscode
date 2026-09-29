@@ -11,6 +11,11 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Fixed
 
+- **A control dropped on a derived (inherited) form is no longer hidden behind the base's controls.** The base's
+  `InitializeComponent` adds its controls first, so they sit in front of anything the derived file adds; the new
+  control was added at the back and was invisible (only its selection frame showed) — also at runtime. The add now
+  writes `Controls.SetChildIndex(this.<new>, 0)` in a derived designer, as Visual Studio does, and the live net48
+  preview brings the dropped control to the front.
 - **Localized forms with framework enum resources render.** A localized form stores every enum-valued property as
   a typed `.resx` node; only a handful of enums (`AnchorStyles`, `DockStyle`, …) were accepted, so e.g. a `TextBox`'s
   `ScrollBars`, `ImeMode` or a `CheckBox`'s `Appearance` was refused as unsafe and forced the compiled fallback. Any

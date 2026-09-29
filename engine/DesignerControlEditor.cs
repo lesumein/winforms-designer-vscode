@@ -664,7 +664,7 @@ namespace WinFormsDesigner.Engine
         /// moment Visual Studio writes it. Ignored unless it matches the exact literal shape.</param>
         public static ControlAddResult AddControl(string src, string parentId, string controlTypeKey,
             IReadOnlyList<ToolboxItemInfo>? projectControls = null, int? locX = null, int? locY = null,
-            string? autoScaleDimensions = null, int? width = null, int? height = null)
+            string? autoScaleDimensions = null, int? width = null, int? height = null, bool derivedDesigner = false)
         {
             var spec = ResolveSpec(controlTypeKey, projectControls);
             if (spec == null)
@@ -723,11 +723,19 @@ namespace WinFormsDesigner.Engine
             if (HasVisualStyleBackColor(spec.Fqn)) P($"this.{name}.UseVisualStyleBackColor = true;");
 
             var layout = InitLayout(src, init, cls, names, layoutOwnerId, parentRoot);
+            // In a DERIVED designer the parent (the root, or a container the base declares) already holds the base's
+            // controls, which the base's InitializeComponent added first — they sit IN FRONT of anything this file adds,
+            // so "newest Add first" no longer puts the drop on top and it vanishes behind them. Visual Studio restores the
+            // z-order with Controls.SetChildIndex; bring the new control to the front the same way.
+            bool parentMayHoldInherited = parentRoot || !names.Contains(layoutOwnerId);
+            string bringToFront = derivedDesigner && parentMayHoldInherited
+                ? indent + $"{addReceiver}.SetChildIndex(this.{name}, 0);" + nl
+                : "";
             var inserts = new List<(int Pos, int Seq, string Text)>
             {
                 (layout.CtorPos, 0, indent + $"this.{name} = new {spec.Fqn}();" + nl),
                 (layout.PropertiesPos, 2, properties.ToString()),
-                (layout.AddPos, 3, indent + $"{addReceiver}.Add(this.{name});" + nl),
+                (layout.AddPos, 3, indent + $"{addReceiver}.Add(this.{name});" + nl + bringToFront),
             };
             // A form that has never carried a control yet (this extension's own Add → Form output) gains the layout
             // scaffold and the form's own block header on this first drop, exactly as Visual Studio would write it.
