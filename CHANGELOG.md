@@ -11,6 +11,9 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Fixed
 
+- **Enums nested in a class resolve.** An enum declared inside a control class (`Vendor.TrackBar.ScaleType`) is
+  written with dots in C# but named `Vendor.TrackBar+ScaleType` by the CLR, so `unresolved enum type` forced the
+  compiled fallback. The executor now retries the trailing segments as nested type names.
 - **net48: a background-thread exception from design-time user code no longer kills the engine.** A `Thread`,
   `ThreadPool` or `System.Threading.Timer` callback started by user code during a render (a base form's constructor, a
   control's `Load`) that later threw terminated the engine process under the default unhandled-exception policy. The

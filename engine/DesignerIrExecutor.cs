@@ -701,7 +701,7 @@ namespace WinFormsDesigner.Engine
 
                 case IrEnum en:
                     {
-                        var et = host.ResolveType(en.EnumTypeName);
+                        var et = host.ResolveType(en.EnumTypeName) ?? ResolveNestedType(host, en.EnumTypeName);
                         if (et == null) { err = "unresolved enum type " + en.EnumTypeName; return false; }
                         if (!et.IsEnum) { err = en.EnumTypeName + " is not an enum"; return false; }
                         long acc = 0;
@@ -842,6 +842,22 @@ namespace WinFormsDesigner.Engine
             target = inherited;
             redirected = true;
             return 1;
+        }
+
+        /// <summary>C# spells a NESTED type with dots (`Vendor.TrackBar.ScaleType`) where the CLR name uses `+`
+        /// (`Vendor.TrackBar+ScaleType`). Retry with the trailing segments as nested names, innermost split first. Only
+        /// names are rewritten; what the caller may do with the type is still gated by its own checks.</summary>
+        private static Type? ResolveNestedType(IIrHost host, string dottedName)
+        {
+            var parts = dottedName.Split('.');
+            for (int k = parts.Length - 1; k >= 1; k--)
+            {
+                string outer = string.Join(".", parts, 0, k);
+                string nested = string.Join("+", parts, k, parts.Length - k);
+                var t = host.ResolveType(outer + "+" + nested);
+                if (t != null) return t;
+            }
+            return null;
         }
 
         private static bool TryTarget(bool isRoot, string name, Dictionary<string, object> inst, out object target, out string? err)
