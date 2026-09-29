@@ -56,6 +56,12 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Added
 
+- **Any simple property of an inherited control can be overridden** from the derived designer, as in Visual Studio
+  (a `public`/`protected` base control). Beyond the named Location/Size/Bounds/Anchor/Dock/Text/Enabled/Visible/
+  TabIndex rows, a serializable property of a simple designer type (string, numbers, bool, enums, `Color`, `Font`,
+  `Point`, `Size`, `Padding`, ...) is now editable and resettable. The written value must be a context-free value the
+  interpreter's closed allowlist represents (no invocation beyond the allowlisted factories, no `this`); identity and
+  structure (`Name`, `Parent`, `Controls`, ...) stay with the base.
 - **Derived (inherited) designers interpret instead of falling back.** A derived form's `InitializeComponent` addresses
   controls declared by its base — `this.panel1.SuspendLayout()`, `((ISupportInitialize)this.grid1).BeginInit()`,
   `this.panel1.Controls.Add(this.newButton)`, `this.Controls.SetChildIndex(this.panel1, 0)`, and property writes beyond

@@ -59,6 +59,24 @@ namespace WinFormsDesigner.Engine
             "TabIndex",
         };
 
+        /// <summary>Properties never overridden from a derived designer even though they are writable: identity and
+        /// structure belong to the base (Visual Studio does not let a derived form rename or re-parent them either).</summary>
+        private static readonly HashSet<string> NonOverridableProperties = new(StringComparer.Ordinal)
+        {
+            "Name", "Parent", "Controls", "Site", "DataBindings", "BindingContext", "WindowTarget",
+        };
+
+        /// <summary>Value types a GENERIC inherited override may carry beyond the named allowlist: the simple,
+        /// converter-serialized designer types. Enums are admitted separately (by resolved Type, or as a framework
+        /// enum by name).</summary>
+        private static readonly HashSet<string> SimpleOverrideTypes = new(StringComparer.Ordinal)
+        {
+            "System.String", "System.Boolean", "System.Char", "System.Byte", "System.SByte", "System.Int16", "System.UInt16",
+            "System.Int32", "System.UInt32", "System.Int64", "System.UInt64", "System.Single", "System.Double", "System.Decimal",
+            "System.Drawing.Color", "System.Drawing.Font", "System.Drawing.Point", "System.Drawing.Size", "System.Drawing.SizeF",
+            "System.Drawing.Rectangle", "System.Windows.Forms.Padding",
+        };
+
         public static InheritedOverrideEditResult TryApply(InheritedOverrideEditRequest request) =>
             TryApplyCore(request, null, null, liveTargetValidated: false);
 
@@ -89,8 +107,8 @@ namespace WinFormsDesigner.Engine
                 return Failed("invalid inherited field id: " + request.FieldId);
             if (!DesignerControlEditor.IsValidIdentifier(request.PropertyName))
                 return Failed("invalid property name: " + request.PropertyName);
-            if (!AllowlistedProperties.Contains(request.PropertyName))
-                return Failed("property is not allowlisted for inherited overrides: " + request.PropertyName);
+            if (!PropertyAdmitted(request, liveTargetValidated))
+                return Failed("property is not supported for inherited overrides: " + request.PropertyName);
             if (!IsAccessible(request.EffectiveAccessibility))
                 return Failed("inherited field is not accessible from the derived designer source");
             if (!IsAuthorizedControlType(request.FieldTypeName, resolvedFieldType, resolvedRuntimeType, liveTargetValidated))
@@ -185,7 +203,7 @@ namespace WinFormsDesigner.Engine
                 return Failed("invalid inherited field id: " + request.FieldId);
             if (!DesignerControlEditor.IsValidIdentifier(request.PropertyName))
                 return Failed("invalid property name: " + request.PropertyName);
-            if (!SupportsProperty(request.PropertyName, request.PropertyTypeName))
+            if (!PropertyAdmitted(request, liveTargetValidated))
                 return Failed("property/type is not supported for inherited overrides: " + request.PropertyName);
             if (!IsAccessible(request.EffectiveAccessibility))
                 return Failed("inherited field is not accessible from the derived designer source");
@@ -237,7 +255,49 @@ namespace WinFormsDesigner.Engine
         /// <summary>Metadata-only half of the closed inherited-override property contract. The live engine uses this
         /// to expose only rows the source writer can actually persist; expression validation still happens in
         /// <see cref="TryApply(InheritedOverrideEditRequest)"/> immediately before the splice.</summary>
-        public static bool SupportsProperty(string propertyName, string propertyTypeName)
+        public static bool SupportsProperty(string propertyName, string propertyTypeName) =>
+            SupportsNamedProperty(propertyName, propertyTypeName)
+            || (IsGenericOverrideName(propertyName, propertyTypeName)
+                && (SimpleOverrideTypes.Contains(NormalizeTypeName(propertyTypeName)) || IsFrameworkEnumName(propertyTypeName)));
+
+        /// <summary>Live-type overload: a resolved property type additionally admits ANY enum (a project/vendor enum is
+        /// serialized as a member access the interpreter validates against the real type).</summary>
+        public static bool SupportsProperty(string propertyName, Type propertyType)
+        {
+            string typeName = propertyType.FullName ?? propertyType.Name;
+            return SupportsNamedProperty(propertyName, typeName)
+                || (IsGenericOverrideName(propertyName, typeName)
+                    && (SimpleOverrideTypes.Contains(typeName) || propertyType.IsEnum));
+        }
+
+        private static bool IsGenericOverrideName(string propertyName, string propertyTypeName) =>
+            DesignerControlEditor.IsValidIdentifier(propertyName)
+            && !AllowlistedProperties.Contains(propertyName)       // named rows keep their own type contract
+            && !NonOverridableProperties.Contains(propertyName)
+            && NormalizeTypeName(propertyTypeName).Length > 0;
+
+        private static bool IsFrameworkEnumName(string propertyTypeName)
+        {
+            string name = NormalizeTypeName(propertyTypeName);
+            foreach (var asm in new[] { typeof(Control).Assembly, typeof(System.Drawing.Color).Assembly,
+                                        typeof(System.Drawing.Font).Assembly, typeof(System.Drawing.ContentAlignment).Assembly })
+            {
+                Type? t;
+                try { t = asm.GetType(name, throwOnError: false); } catch { t = null; }
+                if (t != null && t.IsEnum && t.IsPublic) return true;
+            }
+            return false;
+        }
+
+        /// <summary>The live net48 path has already resolved the descriptor with the Type overload of
+        /// <see cref="SupportsProperty(string, Type)"/>; the string-only path re-checks by name.</summary>
+        private static bool PropertyAdmitted(InheritedOverrideEditRequest request, bool liveTargetValidated) =>
+            liveTargetValidated
+                ? SupportsNamedProperty(request.PropertyName, request.PropertyTypeName)
+                  || IsGenericOverrideName(request.PropertyName, request.PropertyTypeName)
+                : SupportsProperty(request.PropertyName, request.PropertyTypeName);
+
+        private static bool SupportsNamedProperty(string propertyName, string propertyTypeName)
         {
             string type = NormalizeTypeName(propertyTypeName);
             return propertyName switch
@@ -343,6 +403,9 @@ namespace WinFormsDesigner.Engine
 
         private static bool IsSafePropertyExpression(string propertyName, string propertyTypeName, ExpressionSyntax value, string raw)
         {
+            // Generic (non-named) properties use the interpreter's closed value allowlist, which admits the allowlisted
+            // factories VS emits (Color.FromArgb, …); the named rows keep their stricter invocation-free grammar.
+            if (!AllowlistedProperties.Contains(propertyName)) return IsGenericOverrideValue(value, raw);
             if (!IsSingleExpression(value, raw)) return false;
             string type = NormalizeTypeName(propertyTypeName);
             return propertyName switch
@@ -356,8 +419,27 @@ namespace WinFormsDesigner.Engine
                 "Enabled" => TypeMatches(type, "System.Boolean") && IsBooleanLiteral(value),
                 "Visible" => TypeMatches(type, "System.Boolean") && IsBooleanLiteral(value),
                 "TabIndex" => TypeMatches(type, "System.Int32") && IsNonNegativeInt(value),
-                _ => false,
+                _ => IsGenericOverrideValue(value, raw),
             };
+        }
+
+        /// <summary>A generic override value: one side-effect-free expression that the interpreter represents without
+        /// any document context (DesignerIrBuilder's closed value allowlist — literals, enum members, allowlisted
+        /// constructors/factories/static reads), never touching <c>this</c>.</summary>
+        private static bool IsGenericOverrideValue(ExpressionSyntax value, string raw)
+        {
+            if (value.GetDiagnostics().Any(d => d.Severity == DiagnosticSeverity.Error)) return false;
+            if (value.ToString().Trim() != raw.Trim()) return false;
+            foreach (var node in value.DescendantNodesAndSelf())
+            {
+                if (node is AssignmentExpressionSyntax || node is AnonymousFunctionExpressionSyntax
+                    || node is AwaitExpressionSyntax || node is ThisExpressionSyntax || node is BaseExpressionSyntax)
+                    return false;
+                if (node.IsKind(SyntaxKind.PreIncrementExpression) || node.IsKind(SyntaxKind.PostIncrementExpression)
+                    || node.IsKind(SyntaxKind.PreDecrementExpression) || node.IsKind(SyntaxKind.PostDecrementExpression))
+                    return false;
+            }
+            return DesignerIrBuilder.IsContextFreeValue(value);
         }
 
         private static bool TypeMatches(string actual, string expected) =>

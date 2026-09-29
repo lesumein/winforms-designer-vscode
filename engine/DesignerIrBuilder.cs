@@ -196,6 +196,17 @@ namespace WinFormsDesigner.Engine
         private static (List<IrStatement>, bool, string?) One(IrStatement n) => (new List<IrStatement> { n }, true, null);
         private static (List<IrStatement>, bool, string?) Rep(List<IrStatement> nodes) => (nodes, true, null);
 
+        /// <summary>Whether <paramref name="expr"/> is a value the interpreter can represent WITHOUT any document context
+        /// (no fields, locals or resources): literals, enum members, the allowlisted constructors / factories / static
+        /// reads, arrays and casts of those. Used by source writers to accept exactly the value shapes the interpreted
+        /// preview can replay.</summary>
+        public static bool IsContextFreeValue(ExpressionSyntax expr)
+        {
+            var empty = new HashSet<string>(StringComparer.Ordinal);
+            var ctx = new Ctx(empty, empty, empty, empty, empty, empty);
+            return ClassifyValue(expr, ctx) != null;
+        }
+
         /// <summary>Classify one InitializeComponent statement into the IR nodes it maps to (0 for a represented no-op
         /// like Suspend/Resume or the container/resx local; 1 for most; N for a multi-item AddRange). An unrepresented
         /// statement carries a reason and drives compiled fallback.</summary>

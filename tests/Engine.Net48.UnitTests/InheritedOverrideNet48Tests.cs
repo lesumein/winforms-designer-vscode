@@ -62,9 +62,18 @@ namespace Engine.Net48.UnitTests
                 Assert.False((bool)Get(stale, "Safe"));
                 Assert.Contains("token", (string)Get(stale, "Reason"), StringComparison.OrdinalIgnoreCase);
 
-                object font = Apply(worker, "publicButton", "Font", "null", token, sourceText);
-                Assert.False((bool)Get(font, "Safe"));
-                Assert.Contains("not supported", (string)Get(font, "Reason"), StringComparison.OrdinalIgnoreCase);
+                object rename = Apply(worker, "publicButton", "Name", "\"renamed\"", token, sourceText);
+                Assert.False((bool)Get(rename, "Safe"));
+                Assert.Contains("not supported", (string)Get(rename, "Reason"), StringComparison.OrdinalIgnoreCase);
+
+                object invocation = Apply(worker, "publicButton", "Text", "System.IO.File.ReadAllText(\"x\")", token, sourceText);
+                Assert.False((bool)Get(invocation, "Safe"));
+
+                object font = Apply(worker, "publicButton", "Font",
+                    "new System.Drawing.Font(\"Arial\", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)))",
+                    token, sourceText);
+                Assert.True((bool)Get(font, "Safe"), (string)Get(font, "Reason"));
+                Assert.Contains("this.publicButton.Font = new System.Drawing.Font(\"Arial\", 12F", TextOf(font));
 
                 AssertNotInheritedOverride(Describe(worker, "internalButton")!);
                 AssertNotInheritedOverride(Describe(worker, "privateProtectedButton")!);

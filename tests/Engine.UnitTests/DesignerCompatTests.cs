@@ -275,6 +275,62 @@ namespace Demo {
         Assert.True(resolver.WasRefused("other.Mode"));
     }
 
+    private const string DerivedDesigner = @"namespace Demo
+{
+    partial class Form2
+    {
+        private void InitializeComponent()
+        {
+            this.SuspendLayout();
+            this.Name = ""Form2"";
+            this.ResumeLayout(false);
+        }
+    }
+}
+";
+
+    private static InheritedOverrideEditResult OverrideInherited(string property, string propertyType, string value) =>
+        DesignerInheritedOverrideEditor.TryApply(new InheritedOverrideEditRequest
+        {
+            SourceText = DerivedDesigner,
+            FieldId = "baseButton",
+            FieldTypeName = "System.Windows.Forms.Button",
+            EffectiveAccessibility = "public",
+            PropertyName = property,
+            PropertyTypeName = propertyType,
+            ValueExpression = value,
+            ExpectedBaseIdentityToken = "token-1",
+            ObservedBaseIdentityToken = "token-1",
+        });
+
+    [Theory]
+    [InlineData("BackColor", "System.Drawing.Color", "System.Drawing.Color.Red")]
+    [InlineData("ForeColor", "System.Drawing.Color", "System.Drawing.Color.FromArgb(((int)(((byte)(64)))), ((int)(((byte)(0)))), ((int)(((byte)(0)))))")]
+    [InlineData("FlatStyle", "System.Windows.Forms.FlatStyle", "System.Windows.Forms.FlatStyle.Flat")]
+    [InlineData("Font", "System.Drawing.Font", "new System.Drawing.Font(\"Arial\", 12F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)))")]
+    [InlineData("AutoSize", "System.Boolean", "true")]
+    [InlineData("Padding", "System.Windows.Forms.Padding", "new System.Windows.Forms.Padding(2)")]
+    public void InheritedOverride_AcceptsASimpleValuedProperty(string property, string type, string value)
+    {
+        var result = OverrideInherited(property, type, value);
+        Assert.True(result.Safe, result.Reason);
+        Assert.Equal(InheritedOverrideEditMode.Insert, result.Mode);
+        Assert.Contains("this.baseButton." + property + " = " + value + ";", result.NewText);
+    }
+
+    [Theory]
+    [InlineData("Name", "System.String", "\"renamed\"")]                                // identity stays with the base
+    [InlineData("Tag", "System.Object", "\"x\"")]                                       // not a simple designer type
+    [InlineData("BackColor", "System.Drawing.Color", "System.Drawing.Color.FromName(this.Text)")]
+    [InlineData("ForeColor", "System.Drawing.Color", "GetColor()")]                     // arbitrary invocation
+    [InlineData("Text", "System.String", "System.IO.File.ReadAllText(\"x\")")]
+    [InlineData("BackColor", "System.Drawing.Color", "this.BackColor")]
+    public void InheritedOverride_RefusesIdentityNonSimpleTypesAndUnsafeValues(string property, string type, string value)
+    {
+        var result = OverrideInherited(property, type, value);
+        Assert.False(result.Safe);
+    }
+
     [Fact]
     public void DropOnADerivedForm_BringsTheNewControlToTheFront()
     {

@@ -3282,7 +3282,8 @@ namespace WinFormsDesigner.Engine.Net48
                     && !property.IsImage
                     && !property.ReferenceValues
                     && !property.IsDataSource
-                    && DesignerInheritedOverrideEditor.SupportsProperty(descriptor.Name, propertyTypeName);
+                    && descriptor.SerializationVisibility == DesignerSerializationVisibility.Visible
+                    && DesignerInheritedOverrideEditor.SupportsProperty(descriptor.Name, descriptor.PropertyType);
                 bool inheritedPropertyEditable = inheritedPropertySupported
                     && (!DesignerInheritedOverrideEditor.IsGeometryProperty(descriptor.Name)
                         || inheritedGeometryOverrideEditable);
@@ -3948,7 +3949,8 @@ namespace WinFormsDesigner.Engine.Net48
             if (descriptor.IsReadOnly) return RefusedInheritedTarget(info, propertyName + " is read-only");
 
             string propertyTypeName = descriptor.PropertyType.FullName ?? descriptor.PropertyType.Name;
-            if (!DesignerInheritedOverrideEditor.SupportsProperty(propertyName, propertyTypeName))
+            if (descriptor.SerializationVisibility != DesignerSerializationVisibility.Visible
+                || !DesignerInheritedOverrideEditor.SupportsProperty(propertyName, descriptor.PropertyType))
                 return RefusedInheritedTarget(info, "property/type is not supported for inherited overrides: " + propertyName);
 
             info.PropertyName = propertyName;

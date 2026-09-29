@@ -166,8 +166,12 @@ public sealed class DesignerInheritedOwnershipTests
             Assert.False(inheritedInfo.Properties.Single(p => p.Name == "Location").ReadOnly);
             Assert.True(inheritedInfo.Properties.Single(p => p.Name == "Location").InheritedOverrideEditable);
             Assert.True(inheritedInfo.Properties.Single(p => p.Name == "Location").InheritedOverrideResettable);
-            Assert.True(inheritedInfo.Properties.Single(p => p.Name == "BackColor").ReadOnly);
-            Assert.Null(inheritedInfo.Properties.Single(p => p.Name == "BackColor").UiTypeEditor);
+            // Any simple-valued property of an accessible inherited control is overridable (VS parity) ...
+            Assert.False(inheritedInfo.Properties.Single(p => p.Name == "BackColor").ReadOnly);
+            Assert.True(inheritedInfo.Properties.Single(p => p.Name == "BackColor").InheritedOverrideEditable);
+            // ... but identity stays with the base.
+            Assert.DoesNotContain(inheritedInfo.Properties, p => (p.Name == "Name" || p.Name == "(Name)") && !p.ReadOnly);
+            Assert.False(DesignerInheritedOverrideEditor.SupportsProperty("Name", "System.String"));
 
             var dockedInfo = Sta.Invoke(() => DesignerRenderer.DescribeComponent(file, "dockedInheritedButton", assembly));
             Assert.NotNull(dockedInfo);
