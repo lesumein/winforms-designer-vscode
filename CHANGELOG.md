@@ -11,6 +11,10 @@ From **1.0** the core designer loop is stable and follows semantic versioning; t
 
 ### Fixed
 
+- **net48: a user-code exception while pumping no longer kills the engine.** An exception thrown from a WndProc
+  dispatched by the STA thread's blocking wait (a `UserControl`'s `Load`, a `RadioButton` `Click` raised by focus) had
+  no managed frame to land in and terminated the whole net48 engine process. Such exceptions are now logged to the
+  output channel and the render continues.
 - **net48: `this.DoubleBuffered = true;` no longer forces the compiled fallback.** `Control.DoubleBuffered` and
   `ResizeRedraw` are protected, so the interpreter's `TypeDescriptor` lookup failed with `no property DoubleBuffered on
   Form` and the form was rendered by constructing the compiled type (running its constructor and `Load`). The two flags

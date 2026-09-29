@@ -4748,8 +4748,18 @@ namespace WinFormsDesigner.Engine.Net48
             // Never let WinForms answer an exception with its modal ThreadExceptionDialog. A vendor control that
             // throws inside a WndProc while we pump would otherwise open "Unhandled exception has occurred in your
             // application" — a MODAL window, so on the render desktop it would block this thread invisibly and wedge
-            // the engine. Letting the exception travel instead surfaces it as a render failure the host can report.
-            try { Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException); } catch { /* already set */ }
+            // the engine.
+            // ThrowException is not enough, though: a message can be dispatched from the COM pump of this STA thread's
+            // blocking wait (e.g. WM_SHOWWINDOW → a UserControl's Load, or focus → RadioButton.OnEnter → Click), with
+            // no managed frame above the WndProc. The exception then escapes to the top of the thread and terminates
+            // the whole engine process, failing every open designer. Catch such WndProc exceptions instead and log
+            // them; with a ThreadException handler attached WinForms never shows its dialog.
+            try { Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException); } catch { /* already set */ }
+            Application.ThreadException += (s, e) =>
+            {
+                try { Console.Error.WriteLine("[engine:net48] design-time code threw (render continues): " + e.Exception); }
+                catch { /* logging must never throw */ }
+            };
             foreach (var action in _queue.GetConsumingEnumerable()) action();
         }
 
